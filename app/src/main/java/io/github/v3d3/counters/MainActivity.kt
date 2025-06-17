@@ -16,6 +16,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Remove // For deleting the last counter
 import androidx.compose.runtime.*
+import androidx.compose.runtime.snapshots.SnapshotStateList // Explicit import for clarity
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -34,27 +35,19 @@ import androidx.wear.compose.material.TimeText
 import androidx.wear.compose.material.Vignette
 import androidx.wear.compose.material.VignettePosition
 import androidx.wear.tooling.preview.devices.WearDevices
-// Removed Gson and TypeToken imports
-// import com.google.gson.Gson
-// import com.google.gson.reflect.TypeToken
-// Removed UUID as it's no longer needed for unique IDs
-
-// --- Data Model (No longer a separate data class, directly use Int) ---
-// The Counter data class is removed. We will store List<Int> directly.
 
 // --- MainActivity ---
 class MainActivity : ComponentActivity() {
 
-    private val TAG = "MultiCounterApp" // Updated TAG for consistency
+    private val TAG = "MultiCounterApp"
     private val PREFS_NAME = "multi_counter_prefs"
-    private val COUNTERS_KEY = "counters_list" // This key will now store a delimited string of Ints
+    private val COUNTERS_KEY = "counters_list" // This key stores a delimited string of Ints
 
-    // State holders that MainActivity controls and passes to Composables
-    // Now a MutableList<Int>
-    private var countersState: MutableState<MutableList<Int>> = mutableStateOf(mutableListOf())
+    // OPTIMIZATION: Use mutableStateListOf for more efficient list state management in Compose.
+    // This allows Compose to track changes to individual elements within the list,
+    // potentially leading to more granular recompositions.
+    private val countersState: SnapshotStateList<Int> = mutableStateListOf()
     private var currentPageIndexState: MutableState<Int> = mutableStateOf(0)
-
-    // Removed Gson instance: private val gson = Gson()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -63,29 +56,29 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             WearApp(
-                counters = countersState.value, // Pass the current list of Ints
-                currentPageIndex = currentPageIndexState.value, // Pass the current page index
+                counters = countersState, // Pass the SnapshotStateList directly
+                currentPageIndex = currentPageIndexState.value,
                 onCountersChanged = { newCounters ->
-                    // Callback to update the counters state in MainActivity
-                    countersState.value = newCounters.toMutableList()
+                    // OPTIMIZATION: Update SnapshotStateList directly for efficiency.
+                    // Clear existing and add all new elements.
+                    countersState.clear()
+                    countersState.addAll(newCounters)
                     saveCounters() // Save immediately when counters change
                 },
                 onPageIndexChanged = { newIndex ->
-                    // Callback to update the current page index in MainActivity
                     currentPageIndexState.value = newIndex
                 },
                 onDeleteLastCounter = {
-                    val currentList = countersState.value.toMutableList()
-                    if (currentList.isNotEmpty()) {
-                        currentList.removeLast() // Remove the last counter (Int)
-                        countersState.value = currentList
+                    // OPTIMIZATION: Directly modify the SnapshotStateList
+                    if (countersState.isNotEmpty()) {
+                        countersState.removeLast() // Remove the last counter (Int)
                         saveCounters() // Save after deletion
-                        Log.i(TAG, "Last counter deleted. Remaining: ${currentList.size}")
+                        Log.i(TAG, "Last counter deleted. Remaining: ${countersState.size}")
 
                         // Adjust current page if the deleted item was the currently viewed one
-                        if (currentPageIndexState.value >= currentList.size && currentList.isNotEmpty()) {
-                            currentPageIndexState.value = currentList.size - 1
-                        } else if (currentList.isEmpty()) {
+                        if (currentPageIndexState.value >= countersState.size && countersState.isNotEmpty()) {
+                            currentPageIndexState.value = countersState.size - 1
+                        } else if (countersState.isEmpty()) {
                             // If all counters are deleted, go to the add new counter page (index 0)
                             currentPageIndexState.value = 0
                         }
@@ -98,6 +91,7 @@ class MainActivity : ComponentActivity() {
     override fun onStop() {
         super.onStop()
         // Save counters when the activity is no longer visible.
+        // This ensures data is saved even if the app process is killed.
         Log.d(TAG, "MainActivity onStop: Saving counters.")
         saveCounters()
     }
@@ -105,27 +99,26 @@ class MainActivity : ComponentActivity() {
     // Load counters from SharedPreferences using a delimited string
     private fun loadCounters() {
         val sharedPrefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        // Get the string, default to empty string if not found
         val countersString = sharedPrefs.getString(COUNTERS_KEY, "")
 
-        // Parse the string back into a MutableList<Int>
         val loadedList = if (countersString.isNullOrEmpty()) {
             mutableListOf() // Start with an empty list if no string is found
         } else {
-            // Split by comma, trim whitespace, convert to Int, filter out any non-numeric results
             countersString.split(",").mapNotNull { it.trim().toIntOrNull() }.toMutableList()
         }
 
-        // If no counters are loaded (either empty string or parsing failed), initialize with a default one (an Int with value 0)
-        countersState.value = if (loadedList.isEmpty()) mutableListOf(0) else loadedList
-        Log.d(TAG, "Counters loaded: ${countersState.value.size} items from string: '$countersString'.")
+        // OPTIMIZATION: Initialize SnapshotStateList directly.
+        // If no counters are loaded, initialize with a default one (an Int with value 0)
+        countersState.clear()
+        countersState.addAll(if (loadedList.isEmpty()) listOf(0) else loadedList)
+        Log.d(TAG, "Counters loaded: ${countersState.size} items from string: '$countersString'.")
     }
 
     // Save counters to SharedPreferences as a delimited string
     private fun saveCounters() {
         val sharedPrefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         // Convert the List<Int> to a comma-separated string
-        val countersString = countersState.value.joinToString(separator = ",")
+        val countersString = countersState.joinToString(separator = ",")
         sharedPrefs.edit().putString(COUNTERS_KEY, countersString).apply()
         Log.d(TAG, "Counters saved as string: '$countersString'.")
     }
@@ -138,25 +131,23 @@ class MainActivity : ComponentActivity() {
         Log.d(TAG, "onKeyDown: KeyCode = $keyCode")
 
         // Get the current list of counters (Ints) and the current page index
-        val currentCounters = countersState.value
+        // OPTIMIZATION: Work directly with the observable list.
+        val currentCounters = countersState
         val currentPage = currentPageIndexState.value
 
         // Check if we are on a valid counter page (not the "add new counter" page)
-        // And if there are any counters to modify
         if (currentPage < currentCounters.size && currentCounters.isNotEmpty()) {
-            val currentCount = currentCounters[currentPage] // Get the Int count directly
             var handled = false
+            val currentCount = currentCounters[currentPage] // Get the Int count directly
             var newCountValue: Int = currentCount
 
             when (keyCode) {
-                // STEM 1 (often the top physical button) for Increment
-                KeyEvent.KEYCODE_STEM_1 -> {
+                KeyEvent.KEYCODE_STEM_1 -> { // Increment
                     newCountValue = currentCount + 1
                     Log.i(TAG, "Counter at index $currentPage incremented to $newCountValue")
                     handled = true
                 }
-                // STEM 2 (often the bottom physical button) for Decrement
-                KeyEvent.KEYCODE_STEM_2 -> {
+                KeyEvent.KEYCODE_STEM_2 -> { // Decrement
                     newCountValue = currentCount - 1
                     Log.i(TAG, "Counter at index $currentPage decremented to $newCountValue")
                     handled = true
@@ -164,10 +155,9 @@ class MainActivity : ComponentActivity() {
             }
 
             if (handled) {
-                // Update the state in MainActivity directly for immediate UI feedback
-                val updatedList = currentCounters.toMutableList()
-                updatedList[currentPage] = newCountValue // Update the Int at the specific index
-                countersState.value = updatedList
+                // OPTIMIZATION: Directly update the element in the SnapshotStateList.
+                // This triggers more efficient recomposition for only the affected item.
+                countersState[currentPage] = newCountValue
 
                 saveCounters() // Save after each physical button press that modifies data
                 return true // Event handled by our logic
@@ -184,39 +174,31 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun WearApp(
-    counters: List<Int>, // Receives the current list of Ints
-    currentPageIndex: Int, // Receives the current page index
-    onCountersChanged: (List<Int>) -> Unit, // Callback to request counter list updates (List<Int>)
-    onPageIndexChanged: (Int) -> Unit, // Callback to request page index updates
-    onDeleteLastCounter: () -> Unit // Callback to delete the last counter
+    counters: List<Int>, // Receives the current list of Ints (can be SnapshotStateList too)
+    currentPageIndex: Int,
+    onCountersChanged: (List<Int>) -> Unit,
+    onPageIndexChanged: (Int) -> Unit,
+    onDeleteLastCounter: () -> Unit
 ) {
-    // Remember the pager state based on the provided current page index
     val pagerState = rememberPagerState(initialPage = currentPageIndex) {
-        // Number of pages will be the number of counters + 1 (for the add new counter screen)
         counters.size + 1
     }
 
-    // Effect to keep currentPageIndexState in MainActivity in sync with pagerState
     LaunchedEffect(pagerState.currentPage) {
         if (currentPageIndex != pagerState.currentPage) {
             onPageIndexChanged(pagerState.currentPage)
         }
     }
 
-    // Effect to adjust pager position if counters list changes (e.g., a counter is deleted/added)
     LaunchedEffect(counters.size) {
-        // Ensure the current page index is valid after a list change
         val newPageIndex = pagerState.currentPage.coerceIn(0, (counters.size).coerceAtLeast(0))
         if (newPageIndex != pagerState.currentPage) {
             pagerState.animateScrollToPage(newPageIndex)
         }
-        // If we were on the last page (Add New Counter) and all counters were deleted,
-        // ensure we stay on the Add New Counter page (which is page 0 if no other counters exist).
         if (counters.isEmpty() && pagerState.currentPage != 0) {
             pagerState.animateScrollToPage(0)
         }
     }
-
 
     Scaffold(
         timeText = { TimeText() },
@@ -224,52 +206,45 @@ fun WearApp(
     ) {
         HorizontalPager(state = pagerState) { page ->
             if (page < counters.size) {
-                // Display individual counter page
-                val count = counters[page] // Get the Int count directly
+                val count = counters[page]
                 CounterPage(
-                    count = count, // Pass the Int count
+                    count = count,
                     onReset = {
+                        // OPTIMIZATION: Create a copy of the list and modify the specific element,
+                        // then pass it to onCountersChanged to update the main state list efficiently.
                         val updatedList = counters.toMutableList()
-                        // Reset by index directly
                         updatedList[page] = 0 // Set count at this index to 0
                         onCountersChanged(updatedList) // Request update via callback
                     }
                 )
             } else {
-                // Display "Add New Counter" page
                 AddCounterPage(
-                    hasCounters = counters.isNotEmpty(), // Pass if any counters exist
+                    hasCounters = counters.isNotEmpty(),
                     onAddCounter = {
-                        // Create a new Counter (Int) instance
-                        val newCounterValue = 0 // New counters start at 0
+                        // OPTIMIZATION: Add new item to a copy and update the main state list.
+                        val newCounterValue = 0
                         val updatedList = counters.toMutableList().apply { add(newCounterValue) }
-                        onCountersChanged(updatedList) // Request update via callback
+                        onCountersChanged(updatedList)
                     },
-                    onDeleteLastCounter = onDeleteLastCounter // Pass the callback from MainActivity
+                    onDeleteLastCounter = onDeleteLastCounter
                 )
             }
         }
     }
 }
 
-/**
- * Composable for displaying a single counter.
- * Reset is now done via long press on the counter itself.
- * Increment/Decrement are handled by physical buttons.
- * Counter name and Delete button are removed.
- */
-@OptIn(ExperimentalFoundationApi::class) // Required for combinedClickable
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun CounterPage(
-    count: Int, // Now directly receives an Int
+    count: Int,
     onReset: () -> Unit
 ) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.DarkGray)
+            // Change background to pitch black
+            .background(Color.Black)
             .padding(8.dp)
-            // Add combinedClickable for long press to reset
             .combinedClickable(
                 onClick = { /* No action on short click, as increment/decrement are physical buttons */ },
                 onLongClick = onReset
@@ -277,48 +252,43 @@ fun CounterPage(
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // Count Display
         Text(
-            text = "$count", // Display the Int count directly
+            text = "$count",
             fontSize = 80.sp,
             fontWeight = FontWeight.Bold,
             color = Color.White,
-            fontFamily = FontFamily.SansSerif,
-            textAlign = TextAlign.Center, // Ensure text is centered
-            modifier = Modifier.fillMaxWidth() // Make sure the text occupies enough width to be a good touch target
+            // Change font to Monospace for rendering efficiency and digital aesthetic
+            fontFamily = FontFamily.Monospace,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth()
         )
     }
 }
 
-/**
- * Composable for the "Add New Counter" screen.
- * Now includes a button to delete the last counter.
- * No longer prompts for counter names.
- */
 @Composable
 fun AddCounterPage(
-    hasCounters: Boolean, // Indicates if there are any counters to delete
-    onAddCounter: () -> Unit, // Changed to no longer take a name parameter or Counter object
+    hasCounters: Boolean,
+    onAddCounter: () -> Unit,
     onDeleteLastCounter: () -> Unit
 ) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.DarkGray)
+            // Change background to pitch black
+            .background(Color.Black)
             .padding(16.dp),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // "Add New Counter" Button (Plus Icon)
         Button(
-            onClick = onAddCounter, // Call the simplified onAddCounter
-            colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF007AFF)), // Bright blue for add
+            onClick = onAddCounter,
+            colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF007AFF)),
             modifier = Modifier
-                .fillMaxWidth(0.8f) // Fill most of the width
-                .aspectRatio(1f) // Make it square
-                .padding(bottom = 8.dp) // Add padding below the add button
+                .fillMaxWidth(0.8f)
+                .aspectRatio(1f)
+                .padding(bottom = 8.dp)
         ) {
-            Icon(Icons.Default.Add, contentDescription = "Add New Counter", modifier = Modifier.size(80.dp), tint = Color.White) // Large plus icon
+            Icon(Icons.Default.Add, contentDescription = "Add New Counter", modifier = Modifier.size(80.dp), tint = Color.White)
         }
         Text(
             text = "Add New Counter",
@@ -327,19 +297,17 @@ fun AddCounterPage(
             modifier = Modifier.padding(top = 8.dp, bottom = 16.dp)
         )
 
-        // "Delete Last Counter" Button (Minus Icon)
         Button(
             onClick = onDeleteLastCounter,
-            // Enable only if there are counters to delete
             enabled = hasCounters,
             colors = ButtonDefaults.buttonColors(
-                backgroundColor = if (hasCounters) Color(0xFFD32F2F) else Color(0x88D32F2F) // Darker red, dimmed if disabled
+                backgroundColor = if (hasCounters) Color(0xFFD32F2F) else Color(0x88D32F2F)
             ),
             modifier = Modifier
-                .fillMaxWidth(0.6f) // Smaller than add button
-                .aspectRatio(1f) // Make it square
+                .fillMaxWidth(0.6f)
+                .aspectRatio(1f)
         ) {
-            Icon(Icons.Default.Remove, contentDescription = "Delete Last Counter", modifier = Modifier.size(40.dp), tint = Color.White) // Minus icon
+            Icon(Icons.Default.Remove, contentDescription = "Delete Last Counter", modifier = Modifier.size(40.dp), tint = Color.White)
         }
         Text(
             text = "Delete Last",
@@ -350,13 +318,11 @@ fun AddCounterPage(
     }
 }
 
-// --- Preview Composables ---
 @Preview(device = WearDevices.SMALL_ROUND, showSystemUi = true)
 @Composable
 fun WearAppPreviewRound() {
-    // Provide dummy data for preview (List<Int>)
     WearApp(
-        counters = mutableStateListOf(42), // No names, just a count
+        counters = mutableStateListOf(42),
         currentPageIndex = 0,
         onCountersChanged = {},
         onPageIndexChanged = {},
@@ -367,9 +333,8 @@ fun WearAppPreviewRound() {
 @Preview(device = WearDevices.RECT, showSystemUi = true)
 @Composable
 fun WearAppPreviewRect() {
-    // Provide dummy data for preview (List<Int>)
     WearApp(
-        counters = mutableStateListOf(42), // No names, just a count
+        counters = mutableStateListOf(42),
         currentPageIndex = 0,
         onPageIndexChanged = {},
         onCountersChanged = {},
